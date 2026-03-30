@@ -2,81 +2,49 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+
 #define MAX_VARS 20
 #define MAX_LEN 256
 #define EPS 1e-9
+
+
 #define PINK "\033[1;35m"
 #define RESET "\033[0m"
-int MOD = -1;
-int g_n_vars = 0;
+
+int MOD = -1;                
+int g_n_vars = 0;             
+int g_order = 0;         
+#define ORDER_LEX      0
+#define ORDER_GRLEX    1
+#define ORDER_GREVLEX  2
+#define ORDER_INVLEX   3
+#define ORDER_RINVLEX  4
+
+
 typedef struct {
     double re, im;
 } coef_t;
-typedef struct Trie Trie;
-double mod_val(double x) {
-    if (MOD == -1) return x;
-    long long r = (long long)x % MOD;
-    if (r < 0) r += MOD;
-    return (double)r;
-}
-int is_zero(coef_t c) {
-    return fabs(c.re) < EPS && fabs(c.im) < EPS;
-}
-coef_t add(coef_t a, coef_t b) {
-    return (coef_t) { mod_val(a.re + b.re), mod_val(a.im + b.im) };
-}
-coef_t sub(coef_t a, coef_t b) {
-    return (coef_t) { mod_val(a.re - b.re), mod_val(a.im - b.im) };
-}
-coef_t mul(coef_t a, coef_t b) {
-    return (coef_t) {
-        mod_val(a.re * b.re - a.im * b.im),
-            mod_val(a.re * b.im + a.im * b.re)
-    };
-}
-coef_t divc(coef_t a, coef_t b) {
-    if (MOD != -1) {
-        printf("division not support when mod\n");
-        return (coef_t) { 0, 0 };
-    }
-    double den = b.re * b.re + b.im * b.im;
-    if (fabs(den) < EPS) {
-        printf("Error: division by zero\n");
-        return (coef_t) { 0, 0 };
-    }
-    return (coef_t) {
-        (a.re * b.re + a.im * b.im) / den,
-            (a.im * b.re - a.re * b.im) / den
-    };
-}
-coef_t powc(coef_t a, int n) {
-    coef_t res = { 1,0 };
-    coef_t base = a;
-    while (n>0) {
-        if (n & 1) res = mul(res, base);
-        base = mul(base, base);
-        n >>= 1;
-    }
-    return res;
-}
+
 typedef struct {
     coef_t c;
     int power[MAX_VARS];
 } Mono;
-typedef struct Child {
-    int power;
-    Trie* node;
-    struct Child* next;
-} Child;
-struct Trie {
-    coef_t coef;
-    int is_end;
-    Child* children;
-};
+
+typedef struct Trie {
+    coef_t coef;          
+    int is_end;           
+    struct Child {
+        int power;
+        struct Trie* node;
+        struct Child* next;
+    }*children;
+} Trie;
+
 typedef struct {
     Mono* arr;
     int size, cap;
 } List;
+
 void list_init(List* L);
 void list_add(List* L, Mono m);
 void list_free(List* L);
@@ -88,8 +56,8 @@ void free_trie(Trie* t);
 int mono_equal(Mono a, Mono b, int n);
 void normalize(List* L, int n);
 int degree_mono(Mono m, int n);
-int mono_cmp_by_degree(const void* a, const void* b);
-void sort_monos_by_degree(List* L, int n);
+int mono_cmp(const void* a, const void* b);          
+void sort_monos(List* L, int n);
 void print_coef(coef_t c);
 void print_poly(Trie* root, char** vars, int n);
 Trie* poly_add(Trie* A, Trie* B, int n);
@@ -109,11 +77,21 @@ void decompose(Trie* root, char** vars, int n);
 void supp(Trie* root, int n);
 int poly_equal(Trie* A, Trie* B, int n);
 Trie* get_homogeneous_component(Trie* root, int degree, int n);
+void normalize_poly(Trie* p, int n);                 
+void leading_term(Trie* p, int n, Mono* out);       
+coef_t lc(Trie* p, int n);                      
+void multideg(Trie* p, int n, int* deg);         
+void lm_str(Trie* p, int n, char* buf);            
+void lt_str(Trie* p, int n, char* buf);            
+
+
+
 void list_init(List* L) {
     L->size = 0;
     L->cap = 8;
     L->arr = malloc(sizeof(Mono) * L->cap);
 }
+
 void list_add(List* L, Mono m) {
     if (L->size == L->cap) {
         L->cap *= 2;
@@ -121,38 +99,43 @@ void list_add(List* L, Mono m) {
     }
     L->arr[L->size++] = m;
 }
+
 void list_free(List* L) {
     free(L->arr);
 }
+
 Trie* create_node() {
     Trie* t = calloc(1, sizeof(Trie));
     return t;
 }
+
 Trie* get_child(Trie* node, int power) {
-    Child* cur = node->children;
+    struct Child* cur = node->children;
     while (cur) {
         if (cur->power == power)
             return cur->node;
         cur = cur->next;
     }
-    Child* new_child = malloc(sizeof(Child));
+    struct Child* new_child = malloc(sizeof(struct Child));
     new_child->power = power;
     new_child->node = create_node();
     new_child->next = node->children;
     node->children = new_child;
     return new_child->node;
 }
+
 void insert(Trie* root, int* p, int n, coef_t c) {
     Trie* cur = root;
     for (int i = 0; i < n; i++) {
         cur = get_child(cur, p[i]);
     }
     cur->is_end = 1;
-    cur->coef = add(cur->coef, c);
+    cur->coef = (coef_t){ cur->coef.re + c.re, cur->coef.im + c.im };
 }
+
 void collect(Trie* node, int* path, int depth, int n, List* L) {
     if (!node) return;
-    if (depth > MAX_VARS) return; 
+    if (depth > MAX_VARS) return;
     if (node->is_end) {
         Mono m;
         m.c = node->coef;
@@ -161,34 +144,38 @@ void collect(Trie* node, int* path, int depth, int n, List* L) {
             memcpy(m.power, path, sizeof(int) * depth);
         list_add(L, m);
     }
-    Child* child = node->children;
+    struct Child* child = node->children;
     while (child) {
         path[depth] = child->power;
         collect(child->node, path, depth + 1, n, L);
         child = child->next;
     }
 }
+
 void free_trie(Trie* t) {
     if (!t) return;
-    Child* child = t->children;
+    struct Child* child = t->children;
     while (child) {
         free_trie(child->node);
-        Child* next = child->next;
+        struct Child* next = child->next;
         free(child);
         child = next;
     }
     free(t);
 }
+
 int mono_equal(Mono a, Mono b, int n) {
     for (int i = 0; i < n; i++)
         if (a.power[i] != b.power[i]) return 0;
     return fabs(a.c.re - b.c.re) < EPS && fabs(a.c.im - b.c.im) < EPS;
 }
+
 void normalize(List* L, int n) {
     for (int i = 0; i < L->size; i++) {
         for (int j = i + 1; j < L->size; j++) {
             if (mono_equal(L->arr[i], L->arr[j], n)) {
-                L->arr[i].c = add(L->arr[i].c, L->arr[j].c);
+                L->arr[i].c.re += L->arr[j].c.re;
+                L->arr[i].c.im += L->arr[j].c.im;
                 for (int k = j; k < L->size - 1; k++)
                     L->arr[k] = L->arr[k + 1];
                 L->size--;
@@ -197,7 +184,7 @@ void normalize(List* L, int n) {
         }
     }
     for (int i = 0; i < L->size; i++) {
-        if (is_zero(L->arr[i].c)) {
+        if (fabs(L->arr[i].c.re) < EPS && fabs(L->arr[i].c.im) < EPS) {
             for (int k = i; k < L->size - 1; k++)
                 L->arr[k] = L->arr[k + 1];
             L->size--;
@@ -205,27 +192,71 @@ void normalize(List* L, int n) {
         }
     }
 }
+
 int degree_mono(Mono m, int n) {
     int d = 0;
     for (int i = 0; i < n; i++) d += m.power[i];
     return d;
 }
-int mono_cmp_by_degree(const void* a, const void* b) {
-    const Mono* ma = a;
-    const Mono* mb = b;
-    int da = degree_mono(*ma, g_n_vars);
-    int db = degree_mono(*mb, g_n_vars);
-    if (da != db) return db - da;        
-    for (int i = 0; i < g_n_vars; i++) {     
-        if (ma->power[i] != mb->power[i])
-            return mb->power[i] - ma->power[i];
+
+int mono_cmp(const void* a, const void* b) {
+    const Mono* ma = (const Mono*)a;
+    const Mono* mb = (const Mono*)b;
+    int n = g_n_vars;
+
+    int da = degree_mono(*ma, n);
+    int db = degree_mono(*mb, n);
+
+    switch (g_order) {
+    case ORDER_LEX:
+        for (int i = 0; i < n; i++) {
+            if (ma->power[i] != mb->power[i])
+                return mb->power[i] - ma->power[i];   
+        }
+        return 0;
+
+    case ORDER_GRLEX:
+        if (da != db) return db - da;                
+        for (int i = 0; i < n; i++) {
+            if (ma->power[i] != mb->power[i])
+                return mb->power[i] - ma->power[i];
+        }
+        return 0;
+
+    case ORDER_GREVLEX:
+        if (da != db) return db - da;                 
+        for (int i = n - 1; i >= 0; i--) {         
+            if (ma->power[i] != mb->power[i])
+                return ma->power[i] - mb->power[i]; 
+        }
+        return 0;
+
+    case ORDER_INVLEX:
+    
+        for (int i = n - 1; i >= 0; i--) {
+            if (ma->power[i] != mb->power[i])
+                return mb->power[i] - ma->power[i];   
+        }
+        return 0;
+
+    case ORDER_RINVLEX:
+
+        for (int i = n - 1; i >= 0; i--) {
+            if (ma->power[i] != mb->power[i])
+                return ma->power[i] - mb->power[i];
+        }
+        return 0;
+
+    default:
+        return 0;
     }
-    return 0;
 }
-void sort_monos_by_degree(List* L, int n) {
+
+void sort_monos(List* L, int n) {
     g_n_vars = n;
-    qsort(L->arr, L->size, sizeof(Mono), mono_cmp_by_degree);
+    qsort(L->arr, L->size, sizeof(Mono), mono_cmp);
 }
+
 void print_coef(coef_t c) {
     int re_int = (int)(c.re + 0.5);
     int im_int = (int)(c.im + 0.5);
@@ -255,13 +286,14 @@ void print_coef(coef_t c) {
         else printf("%gi", c.im);
     }
 }
+
 void print_poly(Trie* root, char** vars, int n) {
     List L;
     list_init(&L);
     int path[MAX_VARS] = { 0 };
     collect(root, path, 0, n, &L);
     normalize(&L, n);
-    sort_monos_by_degree(&L, n);
+    sort_monos(&L, n);
     if (L.size == 0) {
         printf("0\n");
         list_free(&L);
@@ -296,8 +328,7 @@ void print_poly(Trie* root, char** vars, int n) {
         for (int j = 0; j < n; j++) {
             if (L.arr[i].power[j]) {
                 printf("%s", vars[j]);
-                if (L.arr[i].power[j] > 1)
-                    printf("^%d", L.arr[i].power[j]);
+                if (L.arr[i].power[j] > 1) printf("^%d", L.arr[i].power[j]);
             }
         }
         first = 0;
@@ -305,8 +336,116 @@ void print_poly(Trie* root, char** vars, int n) {
     printf("\n");
     list_free(&L);
 }
+
+void normalize_poly(Trie* p, int n) {
+    List L;
+    list_init(&L);
+    int path[MAX_VARS] = { 0 };
+    collect(p, path, 0, n, &L);
+    normalize(&L, n);
+
+    free_trie(p);
+
+    p->children = NULL;
+    p->coef = (coef_t){ 0,0 };
+    p->is_end = 0;
+    for (int i = 0; i < L.size; i++) {
+        insert(p, L.arr[i].power, n, L.arr[i].c);
+    }
+    list_free(&L);
+}
+
+void leading_term(Trie* p, int n, Mono* out) {
+    List L;
+    list_init(&L);
+    int path[MAX_VARS] = { 0 };
+    collect(p, path, 0, n, &L);
+    normalize(&L, n);
+    sort_monos(&L, n);
+    if (L.size > 0) {
+        *out = L.arr[0];
+    }
+    else {
+        memset(out, 0, sizeof(Mono));
+        out->c = (coef_t){ 0,0 };
+    }
+    list_free(&L);
+}
+
+coef_t lc(Trie* p, int n) {
+    Mono m;
+    leading_term(p, n, &m);
+    return m.c;
+}
+
+void multideg(Trie* p, int n, int* deg) {
+    Mono m;
+    leading_term(p, n, &m);
+    memcpy(deg, m.power, sizeof(int) * n);
+}
+
+void lm_str(Trie* p, int n, char* buf) {
+    Mono m;
+    leading_term(p, n, &m);
+    if (m.c.re == 0 && m.c.im == 0) {
+        strcpy(buf, "0");
+        return;
+    }
+    char tmp[256] = "";
+    for (int i = 0; i < n; i++) {
+        if (m.power[i]) {
+            char v[32];
+            sprintf(v, "x%d", i + 1); 
+            strcat(tmp, v);
+            if (m.power[i] > 1) {
+                char exp[16];
+                sprintf(exp, "^%d", m.power[i]);
+                strcat(tmp, exp);
+            }
+        }
+    }
+    if (strlen(tmp) == 0) strcpy(tmp, "1");
+    strcpy(buf, tmp);
+}
+
+void lt_str(Trie* p, int n, char* buf) {
+    Mono m;
+    leading_term(p, n, &m);
+    if (m.c.re == 0 && m.c.im == 0) {
+        strcpy(buf, "0");
+        return;
+    }
+    char coeff[64];
+    if (fabs(m.c.im) < EPS) {
+        if (fabs(m.c.re - 1) < EPS) coeff[0] = 0;
+        else if (fabs(m.c.re + 1) < EPS) sprintf(coeff, "-");
+        else sprintf(coeff, "%g", m.c.re);
+    }
+    else {
+        sprintf(coeff, "(");
+        print_coef(m.c);
+        sprintf(coeff + strlen(coeff), ")");
+    }
+    char mon[256] = "";
+    for (int i = 0; i < n; i++) {
+        if (m.power[i]) {
+            char v[32];
+            sprintf(v, "x%d", i + 1);
+            strcat(mon, v);
+            if (m.power[i] > 1) {
+                char exp[16];
+                sprintf(exp, "^%d", m.power[i]);
+                strcat(mon, exp);
+            }
+        }
+    }
+    if (strlen(mon) == 0) strcpy(mon, "1");
+    if (coeff[0] == 0) sprintf(buf, "%s", mon);
+    else sprintf(buf, "%s%s", coeff, mon);
+}
 Trie* poly_add(Trie* A, Trie* B, int n) {
-    List L; list_init(&L);
+    List L;
+    list_init(&L);
     int path[MAX_VARS] = { 0 };
     collect(A, path, 0, n, &L);
     collect(B, path, 0, n, &L);
@@ -315,13 +454,17 @@ Trie* poly_add(Trie* A, Trie* B, int n) {
     for (int i = 0; i < L.size; i++)
         insert(res, L.arr[i].power, n, L.arr[i].c);
     list_free(&L);
+    normalize_poly(res, n);
     return res;
 }
+
 Trie* poly_sub(Trie* A, Trie* B, int n) {
-    List L; list_init(&L);
+    List L;
+    list_init(&L);
     int path[MAX_VARS] = { 0 };
     collect(A, path, 0, n, &L);
-    List LB; list_init(&LB);
+    List LB;
+    list_init(&LB);
     collect(B, path, 0, n, &LB);
     for (int i = 0; i < LB.size; i++) {
         LB.arr[i].c.re = -LB.arr[i].c.re;
@@ -334,10 +477,13 @@ Trie* poly_sub(Trie* A, Trie* B, int n) {
         insert(res, L.arr[i].power, n, L.arr[i].c);
     list_free(&L);
     list_free(&LB);
+    normalize_poly(res, n);
     return res;
 }
+
 Trie* poly_mul(Trie* A, Trie* B, int n) {
-    List LA, LB; list_init(&LA); list_init(&LB);
+    List LA, LB;
+    list_init(&LA); list_init(&LB);
     int path[MAX_VARS] = { 0 };
     collect(A, path, 0, n, &LA);
     collect(B, path, 0, n, &LB);
@@ -345,52 +491,59 @@ Trie* poly_mul(Trie* A, Trie* B, int n) {
     for (int i = 0; i < LA.size; i++) {
         for (int j = 0; j < LB.size; j++) {
             Mono m;
-            m.c = mul(LA.arr[i].c, LB.arr[j].c);
+            m.c.re = LA.arr[i].c.re * LB.arr[j].c.re - LA.arr[i].c.im * LB.arr[j].c.im;
+            m.c.im = LA.arr[i].c.re * LB.arr[j].c.im + LA.arr[i].c.im * LB.arr[j].c.re;
             for (int k = 0; k < n; k++)
                 m.power[k] = LA.arr[i].power[k] + LB.arr[j].power[k];
             insert(res, m.power, n, m.c);
         }
     }
     list_free(&LA); list_free(&LB);
+    normalize_poly(res, n);
     return res;
 }
+
 Trie* poly_mul_mono(Trie* P, coef_t coeff, int* pow, int n) {
-    List L; list_init(&L);
+    List L;
+    list_init(&L);
     int path[MAX_VARS] = { 0 };
     collect(P, path, 0, n, &L);
     Trie* res = create_node();
     for (int i = 0; i < L.size; i++) {
         Mono m;
-        m.c = mul(L.arr[i].c, coeff);
+        m.c.re = L.arr[i].c.re * coeff.re - L.arr[i].c.im * coeff.im;
+        m.c.im = L.arr[i].c.re * coeff.im + L.arr[i].c.im * coeff.re;
         for (int j = 0; j < n; j++)
             m.power[j] = L.arr[i].power[j] + pow[j];
         insert(res, m.power, n, m.c);
     }
     list_free(&L);
+    normalize_poly(res, n);
     return res;
 }
+
 int mono_divisible(int* a, int* b, int n) {
-    for (int i = 0; i < n; i++)
-        if (a[i] < b[i]) return 0;
+    for (int i = 0; i < n; i++) if (a[i] < b[i]) return 0;
     return 1;
 }
+
 void mono_div(int* a, int* b, int* q, int n) {
-    for (int i = 0; i < n; i++)
-        q[i] = a[i] - b[i];
+    for (int i = 0; i < n; i++) q[i] = a[i] - b[i];
 }
+
 int leading_mono(List* L, int n) {
     if (L->size == 0) return -1;
-    int best = 0;
     g_n_vars = n;
+    int best = 0;
     for (int i = 1; i < L->size; i++) {
-        if (mono_cmp_by_degree(&L->arr[i], &L->arr[best]) < 0)
-            best = i;
+        if (mono_cmp(&L->arr[i], &L->arr[best]) < 0) best = i;
     }
     return best;
 }
+
 void poly_divmod(Trie* A, Trie* B, int n, Trie** Q, Trie** R) {
     if (MOD != -1) {
-        printf("ERROR: polynomial division not supported when MOD is active\n");
+        printf("Division not supported when MOD active.\n");
         *Q = create_node();
         *R = create_node();
         return;
@@ -398,22 +551,27 @@ void poly_divmod(Trie* A, Trie* B, int n, Trie** Q, Trie** R) {
     *Q = create_node();
     *R = create_node();
     int path[MAX_VARS] = { 0 };
-    List LR; list_init(&LR);
+    List LR;
+    list_init(&LR);
     collect(A, path, 0, n, &LR);
     for (int i = 0; i < LR.size; i++)
         insert(*R, LR.arr[i].power, n, LR.arr[i].c);
     list_free(&LR);
-    List LB; list_init(&LB);
+
+    List LB;
+    list_init(&LB);
     collect(B, path, 0, n, &LB);
     normalize(&LB, n);
     if (LB.size == 0) {
-        printf("ERROR: division by zero polynomial\n");
+        printf("Division by zero.\n");
         list_free(&LB);
         return;
     }
+
     int safety = 0;
-    while (safety++ < 10000) { 
-        List LR2; list_init(&LR2);
+    while (safety++ < 10000) {
+        List LR2;
+        list_init(&LR2);
         collect(*R, path, 0, n, &LR2);
         normalize(&LR2, n);
         if (LR2.size == 0) {
@@ -421,22 +579,26 @@ void poly_divmod(Trie* A, Trie* B, int n, Trie** Q, Trie** R) {
             break;
         }
         int leadR = leading_mono(&LR2, n);
-        if (leadR == -1) {
-            list_free(&LR2);
-            break;
-        }
+        if (leadR == -1) { list_free(&LR2); break; }
         int* leadR_pow = LR2.arr[leadR].power;
         coef_t leadR_coef = LR2.arr[leadR].c;
+
         int leadB = leading_mono(&LB, n);
         int* leadB_pow = LB.arr[leadB].power;
         coef_t leadB_coef = LB.arr[leadB].c;
+
         if (!mono_divisible(leadR_pow, leadB_pow, n)) {
             list_free(&LR2);
             break;
         }
+
         int qpow[MAX_VARS];
         mono_div(leadR_pow, leadB_pow, qpow, n);
-        coef_t qcoef = divc(leadR_coef, leadB_coef);
+        double den = leadB_coef.re * leadB_coef.re + leadB_coef.im * leadB_coef.im;
+        coef_t qcoef = {
+            (leadR_coef.re * leadB_coef.re + leadR_coef.im * leadB_coef.im) / den,
+            (leadR_coef.im * leadB_coef.re - leadR_coef.re * leadB_coef.im) / den
+        };
         insert(*Q, qpow, n, qcoef);
         Trie* qB = poly_mul_mono(B, qcoef, qpow, n);
         Trie* newR = poly_sub(*R, qB, n);
@@ -444,52 +606,57 @@ void poly_divmod(Trie* A, Trie* B, int n, Trie** Q, Trie** R) {
         free_trie(qB);
         *R = newR;
         list_free(&LR2);
-        List LR3; list_init(&LR3);
-        collect(*R, path, 0, n, &LR3);
-        normalize(&LR3, n);
-        if (LR3.size == 0) {
-            list_free(&LR3);
+        List test;
+        list_init(&test);
+        collect(*R, path, 0, n, &test);
+        if (test.size == 0) {
+            list_free(&test);
             break;
         }
-        free_trie(*R);
-        *R = create_node();
-        for (int i = 0; i < LR3.size; i++)
-            insert(*R, LR3.arr[i].power, n, LR3.arr[i].c);
-        list_free(&LR3);
+        list_free(&test);
     }
     list_free(&LB);
+    normalize_poly(*Q, n);
+    normalize_poly(*R, n);
 }
+
 Trie* poly_div(Trie* A, Trie* B, int n) {
     Trie* Q, * R;
     poly_divmod(A, B, n, &Q, &R);
     free_trie(R);
     return Q;
 }
+
 Trie* poly_mod(Trie* A, Trie* B, int n) {
     Trie* Q, * R;
     poly_divmod(A, B, n, &Q, &R);
     free_trie(Q);
     return R;
 }
+
 Trie* poly_derivative(Trie* P, int idx, int n) {
-    List L; list_init(&L);
+    List L;
+    list_init(&L);
     int path[MAX_VARS] = { 0 };
     collect(P, path, 0, n, &L);
     Trie* res = create_node();
     for (int i = 0; i < L.size; i++) {
         int exp = L.arr[i].power[idx];
         if (exp == 0) continue;
-        coef_t newc = mul(L.arr[i].c, (coef_t) { exp, 0 });
+        coef_t newc = { L.arr[i].c.re * exp, L.arr[i].c.im * exp };
         int newpow[MAX_VARS];
         memcpy(newpow, L.arr[i].power, sizeof(int) * n);
         newpow[idx]--;
         insert(res, newpow, n, newc);
     }
     list_free(&L);
+    normalize_poly(res, n);
     return res;
 }
+
 coef_t eval_trie_complex(Trie* root, coef_t* vals, int n) {
-    List L; list_init(&L);
+    List L;
+    list_init(&L);
     int path[MAX_VARS] = { 0 };
     collect(root, path, 0, n, &L);
     coef_t res = { 0,0 };
@@ -497,16 +664,27 @@ coef_t eval_trie_complex(Trie* root, coef_t* vals, int n) {
         coef_t term = L.arr[i].c;
         for (int j = 0; j < n; j++) {
             if (L.arr[i].power[j] > 0) {
-                term = mul(term, powc(vals[j], L.arr[i].power[j]));
+                coef_t base = vals[j];
+                coef_t pow = { 1,0 };
+                int e = L.arr[i].power[j];
+                while (e--) {
+                    pow.re = pow.re * base.re - pow.im * base.im;
+                    pow.im = pow.re * base.im + pow.im * base.re;
+                }
+                term.re = term.re * pow.re - term.im * pow.im;
+                term.im = term.re * pow.im + term.im * pow.re;
             }
         }
-        res = add(res, term);
+        res.re += term.re;
+        res.im += term.im;
     }
     list_free(&L);
     return res;
 }
+
 int homogeneous(Trie* root, int n) {
-    List L; list_init(&L);
+    List L;
+    list_init(&L);
     int path[MAX_VARS] = { 0 };
     collect(root, path, 0, n, &L);
     if (L.size == 0) { list_free(&L); return 1; }
@@ -516,11 +694,14 @@ int homogeneous(Trie* root, int n) {
     list_free(&L);
     return 1;
 }
+
 void decompose(Trie* root, char** vars, int n) {
-    List L; list_init(&L);
+    List L;
+    list_init(&L);
     int path[MAX_VARS] = { 0 };
     collect(root, path, 0, n, &L);
     normalize(&L, n);
+    sort_monos(&L, n);
     for (int d = 0; d <= 20; d++) {
         int printed = 0;
         for (int i = 0; i < L.size; i++) {
@@ -538,8 +719,10 @@ void decompose(Trie* root, char** vars, int n) {
     }
     list_free(&L);
 }
+
 void supp(Trie* root, int n) {
-    List L; list_init(&L);
+    List L;
+    list_init(&L);
     int path[MAX_VARS] = { 0 };
     collect(root, path, 0, n, &L);
     for (int i = 0; i < L.size; i++) {
@@ -552,8 +735,10 @@ void supp(Trie* root, int n) {
     }
     list_free(&L);
 }
+
 int poly_equal(Trie* A, Trie* B, int n) {
-    List LA, LB; list_init(&LA); list_init(&LB);
+    List LA, LB;
+    list_init(&LA); list_init(&LB);
     int path[MAX_VARS] = { 0 };
     collect(A, path, 0, n, &LA);
     collect(B, path, 0, n, &LB);
@@ -568,8 +753,10 @@ int poly_equal(Trie* A, Trie* B, int n) {
     list_free(&LA); list_free(&LB);
     return 1;
 }
+
 Trie* get_homogeneous_component(Trie* root, int degree, int n) {
-    List L; list_init(&L);
+    List L;
+    list_init(&L);
     int path[MAX_VARS] = { 0 };
     collect(root, path, 0, n, &L);
     Trie* res = create_node();
@@ -577,6 +764,7 @@ Trie* get_homogeneous_component(Trie* root, int degree, int n) {
         if (degree_mono(L.arr[i], n) == degree)
             insert(res, L.arr[i].power, n, L.arr[i].c);
     list_free(&L);
+    normalize_poly(res, n);
     return res;
 }
 typedef struct {
@@ -585,6 +773,7 @@ typedef struct {
     char** vars;
     int n_vars;
 } ParserState;
+
 Trie* parse_expression(ParserState* p, int n);
 Trie* parse_mul(ParserState* p, int n);
 Trie* parse_power(ParserState* p, int n);
@@ -595,18 +784,12 @@ void skip_spaces(ParserState* p);
 int is_alpha(char c);
 int is_digit(char c);
 int end_of_string(ParserState* p);
-int end_of_string(ParserState* p) {
-    return p->s[p->pos] == '\0';
-}
-void skip_spaces(ParserState* p) {
-    while (!end_of_string(p) && p->s[p->pos] == ' ') p->pos++;
-}
-int is_alpha(char c) {
-    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
-}
-int is_digit(char c) {
-    return c >= '0' && c <= '9';
-}
+
+int end_of_string(ParserState* p) { return p->s[p->pos] == '\0'; }
+void skip_spaces(ParserState* p) { while (!end_of_string(p) && p->s[p->pos] == ' ') p->pos++; }
+int is_alpha(char c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'); }
+int is_digit(char c) { return c >= '0' && c <= '9'; }
+
 double parse_number(ParserState* p) {
     double sign = 1;
     if (p->s[p->pos] == '-') { sign = -1; p->pos++; }
@@ -639,6 +822,7 @@ double parse_number(ParserState* p) {
     }
     return sign * n;
 }
+
 coef_t parse_complex(ParserState* p) {
     if (MOD != -1) {
         double val = parse_number(p);
@@ -678,8 +862,7 @@ coef_t parse_complex(ParserState* p) {
         }
         else {
             p->pos = start;
-            c.re = 0;
-            c.im = 0;
+            c.re = 0; c.im = 0;
             re = parse_number(p);
             if (!end_of_string(p) && p->s[p->pos] == 'i') {
                 p->pos++;
@@ -692,26 +875,17 @@ coef_t parse_complex(ParserState* p) {
     }
     return c;
 }
+
 Trie* parse_atom(ParserState* p, int n) {
     skip_spaces(p);
     int sign = 1;
-    if (!end_of_string(p) && p->s[p->pos] == '-') {
-        sign = -1;
-        p->pos++;
-        skip_spaces(p);
-    }
-    else if (!end_of_string(p) && p->s[p->pos] == '+') {
-        p->pos++;
-        skip_spaces(p);
-    }
+    if (!end_of_string(p) && p->s[p->pos] == '-') { sign = -1; p->pos++; skip_spaces(p); }
+    else if (!end_of_string(p) && p->s[p->pos] == '+') { p->pos++; skip_spaces(p); }
     Trie* t = NULL;
     if (!end_of_string(p) && p->s[p->pos] == '(') {
         p->pos++;
         t = parse_expression(p, n);
-        if (!end_of_string(p) && p->s[p->pos] != ')') {
-            printf("ERROR: expected ')'\n");
-            exit(1);
-        }
+        if (!end_of_string(p) && p->s[p->pos] != ')') { printf("ERROR: expected ')'\n"); exit(1); }
         p->pos++;
     }
     else if (!end_of_string(p) && is_alpha(p->s[p->pos])) {
@@ -722,12 +896,8 @@ Trie* parse_atom(ParserState* p, int n) {
         }
         name[k] = 0;
         int idx = -1;
-        for (int i = 0; i < n; i++)
-            if (strcmp(p->vars[i], name) == 0) { idx = i; break; }
-        if (idx == -1) {
-            printf("ERROR: unknown variable '%s'\n", name);
-            exit(1);
-        }
+        for (int i = 0; i < n; i++) if (strcmp(p->vars[i], name) == 0) { idx = i; break; }
+        if (idx == -1) { printf("ERROR: unknown variable '%s'\n", name); exit(1); }
         int pow[MAX_VARS] = { 0 };
         pow[idx] = 1;
         t = create_node();
@@ -740,7 +910,8 @@ Trie* parse_atom(ParserState* p, int n) {
         insert(t, pow, n, c);
     }
     if (sign == -1) {
-        List L; list_init(&L);
+        List L;
+        list_init(&L);
         int path[MAX_VARS] = { 0 };
         collect(t, path, 0, n, &L);
         Trie* neg = create_node();
@@ -754,6 +925,7 @@ Trie* parse_atom(ParserState* p, int n) {
     }
     return t;
 }
+
 Trie* parse_power(ParserState* p, int n) {
     Trie* left = parse_atom(p, n);
     skip_spaces(p);
@@ -767,8 +939,8 @@ Trie* parse_power(ParserState* p, int n) {
         }
         int e = (int)exp;
         Trie* result = create_node();
-        int zero_pow[MAX_VARS] = { 0 };
-        insert(result, zero_pow, n, (coef_t) { 1, 0 });
+        int zero[MAX_VARS] = { 0 };
+        insert(result, zero, n, (coef_t) { 1, 0 });
         for (int i = 0; i < e; i++) {
             Trie* tmp = poly_mul(result, left, n);
             free_trie(result);
@@ -779,6 +951,7 @@ Trie* parse_power(ParserState* p, int n) {
     }
     return left;
 }
+
 Trie* parse_mul(ParserState* p, int n) {
     Trie* left = parse_power(p, n);
     while (1) {
@@ -801,6 +974,7 @@ Trie* parse_mul(ParserState* p, int n) {
     }
     return left;
 }
+
 Trie* parse_expression(ParserState* p, int n) {
     Trie* left = parse_mul(p, n);
     while (1) {
@@ -818,6 +992,7 @@ Trie* parse_expression(ParserState* p, int n) {
     }
     return left;
 }
+
 Trie* parse_poly_full(char* s, int n, char** vars) {
     ParserState p = { s, 0, vars, n };
     Trie* res = parse_expression(&p, n);
@@ -848,11 +1023,14 @@ void print_menu() {
     printf("12. Check if f == g\n");
     printf("13. Derivative of f (by variable)\n");
     printf("14. Change modulus (MOD)\n");
-    printf("15. *** Show all results ***\n");
+    printf("15. Show all results (f+g, f-g, f*g, ...)\n");
     printf("16. Extract homogeneous component of f (given degree)\n");
+    printf("17. Set monomial order\n");
+    printf("18. Show lm, lt, lc, multideg for f and g\n");
     printf("0. Exit\n");
     printf("Choose: ");
 }
+
 void show_all(Trie* F, Trie* G, char** vars, int n) {
     if (!F || !G) { printf("No polynomials loaded.\n"); return; }
     printf(PINK "\n**********  COMPLETE ANALYSIS  **********\n" RESET);
@@ -893,6 +1071,50 @@ void show_all(Trie* F, Trie* G, char** vars, int n) {
     }
     printf(PINK "\n**********  END  **********\n" RESET);
 }
+
+void set_order() {
+    printf("Select monomial order:\n");
+    printf("0. lex\n");
+    printf("1. grlex\n");
+    printf("2. grevlex\n");
+    printf("3. invlex\n");
+    printf("4. rinvlex\n");
+    int ord;
+    if (scanf("%d", &ord) != 1) {
+        printf("Invalid input.\n");
+        while (getchar() != '\n');
+        return;
+    }
+    if (ord >= 0 && ord <= 4) g_order = ord;
+    else printf("Invalid order.\n");
+    printf("Order set to ");
+    switch (g_order) {
+    case 0: printf("lex\n"); break;
+    case 1: printf("grlex\n"); break;
+    case 2: printf("grevlex\n"); break;
+    case 3: printf("invlex\n"); break;
+    case 4: printf("rinvlex\n"); break;
+    }
+}
+
+void show_lm_lt_lc_multideg(Trie* P, char** vars, int n, const char* name) {
+    if (!P) { printf("%s not loaded.\n", name); return; }
+    Mono m;
+    leading_term(P, n, &m);
+    char mon_str[256], term_str[256];
+    lm_str(P, n, mon_str);
+    lt_str(P, n, term_str);
+    int deg[MAX_VARS];
+    multideg(P, n, deg);
+    printf("\n%s:\n", name);
+    printf("  multideg = (");
+    for (int i = 0; i < n; i++) printf("%d%s", deg[i], i == n - 1 ? ")" : ",");
+    printf("\n");
+    printf("  lm = %s\n", mon_str);
+    printf("  lc = "); print_coef(lc(P, n)); printf("\n");
+    printf("  lt = %s\n", term_str);
+}
+
 int main() {
     int n = 0;
     char** vars = NULL;
@@ -1070,6 +1292,16 @@ int main() {
             printf("Homogeneous component of degree %d: ", deg);
             print_poly(h, vars, n);
             free_trie(h);
+            break;
+        }
+        case 17: {
+            set_order();
+            break;
+        }
+        case 18: {
+            if (!F || !G) { printf("No polynomials loaded.\n"); break; }
+            show_lm_lt_lc_multideg(F, vars, n, "f");
+            show_lm_lt_lc_multideg(G, vars, n, "g");
             break;
         }
         default:
